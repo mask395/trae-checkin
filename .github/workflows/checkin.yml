@@ -1,0 +1,53 @@
+name: Trae 每日签到
+
+# 每天 UTC 01:10（北京时间 09:10）自动运行；Actions 高峰期可能延迟
+# workflow_dispatch：允许在 Actions 页面手动触发，便于部署后立即验证
+on:
+  schedule:
+    - cron: "10 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 从 Secrets 还原账号凭证
+        shell: bash
+        env:
+          ACCOUNT_LI: ${{ secrets.TRAE_ACCOUNT_LI }}
+          ACCOUNT_DA: ${{ secrets.TRAE_ACCOUNT_DA }}
+        run: |
+          mkdir -p accounts
+          # 每个账号还原为 accounts/<账号名>/storage.json；Secret 为空则跳过
+          restore() {
+            name="$1"; value="$2"
+            if [ -n "$value" ]; then
+              mkdir -p "accounts/$name"
+              printf '%s' "$value" | base64 -d > "accounts/$name/storage.json"
+              echo "已还原账号: $name"
+            else
+              echo "未配置 Secret，跳过: $name"
+            fi
+          }
+          restore "丽" "$ACCOUNT_LI"
+          restore "大号" "$ACCOUNT_DA"
+
+      - name: 批量签到（失败自动重试 3 次）
+        shell: bash
+        run: |
+          ok=0
+          for i in 1 2 3; do
+            if node scripts/checkin-all.js; then ok=1; break; fi
+            echo "第 $i 次运行失败，20 秒后重试..."
+            sleep 20
+          done
+          [ "$ok" = "1" ]

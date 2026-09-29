@@ -1,0 +1,6 @@
+# 账号凭证只存在于本地与 GitHub Secrets，绝不提交到仓库
+accounts/
+# 运行产物
+checkin.log
+node_modules/
+*.out
