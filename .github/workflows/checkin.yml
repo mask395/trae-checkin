@@ -18,7 +18,7 @@ jobs:
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: 从 Secrets 还原账号凭证
         shell: bash
@@ -40,6 +40,12 @@ jobs:
           }
           restore "丽" "$ACCOUNT_LI"
           restore "大号" "$ACCOUNT_DA"
+          # 两个 Secret 都为空时直接报清晰错误，避免后续步骤无意义重试
+          count=$(find accounts -name storage.json | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::没有任何账号凭证。请先在仓库 Settings → Secrets and variables → Actions 添加 TRAE_ACCOUNT_LI / TRAE_ACCOUNT_DA。"
+            exit 1
+          fi
 
       - name: 批量签到（失败自动重试 3 次）
         shell: bash
