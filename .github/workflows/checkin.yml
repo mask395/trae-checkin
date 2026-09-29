@@ -25,6 +25,7 @@ jobs:
         env:
           ACCOUNT_LI: ${{ secrets.TRAE_ACCOUNT_LI }}
           ACCOUNT_DA: ${{ secrets.TRAE_ACCOUNT_DA }}
+          ACCOUNT_XIAO: ${{ secrets.TRAE_ACCOUNT_XIAO }}
         run: |
           mkdir -p accounts
           # 每个账号还原为 accounts/<账号名>/storage.json；Secret 为空则跳过
@@ -40,10 +41,11 @@ jobs:
           }
           restore "丽" "$ACCOUNT_LI"
           restore "大号" "$ACCOUNT_DA"
-          # 两个 Secret 都为空时直接报清晰错误，避免后续步骤无意义重试
+          restore "小号" "$ACCOUNT_XIAO"
+          # 所有 Secret 都为空时直接报清晰错误，避免后续步骤无意义重试
           count=$(find accounts -name storage.json | wc -l)
           if [ "$count" -eq 0 ]; then
-            echo "::error::没有任何账号凭证。请先在仓库 Settings → Secrets and variables → Actions 添加 TRAE_ACCOUNT_LI / TRAE_ACCOUNT_DA。"
+            echo "::error::没有任何账号凭证。请先在仓库 Settings → Secrets and variables → Actions 添加 TRAE_ACCOUNT_LI / TRAE_ACCOUNT_DA / TRAE_ACCOUNT_XIAO。"
             exit 1
           fi
 
