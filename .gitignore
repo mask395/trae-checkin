@@ -1,5 +1,9 @@
 # 账号凭证只存在于本地与 GitHub Secrets，绝不提交到仓库
 accounts/
+# 一键部署便携包：自带运行时（node.exe / gh.exe，体积大）与托管凭证清单
+runtime/
+managed/
+dist/
 # 运行产物
 checkin.log
 node_modules/

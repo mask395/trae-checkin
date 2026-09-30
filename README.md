@@ -25,6 +25,18 @@
 
 一次配置，之后每天自动签到，电脑关机也不受影响。
 
+### 懒人方式：一键部署包（Windows）
+
+不想看教程的用户：
+
+1. 到 [Releases 页面](https://github.com/mask395/trae-checkin/releases) 下载 `Trae云端部署.zip` 并解压
+2. 确保客户端已登录，双击 **一键部署到GitHub.bat**
+3. 按窗口提示完成一次浏览器授权，剩余的 Fork、Secret、启用工作流全自动完成
+
+> 首次运行若弹出 SmartScreen「Windows 已保护你的电脑」：点击 **更多信息 → 仍要运行**（本工具未购买商业代码签名证书）。
+
+### 手动方式（5 步）
+
 1. **Fork 本仓库**（点击页面右上角 Fork；建议随后在你 fork 的 Settings 中将其 **设为私有**）
 2. **导出账号档案**：在登录了目标账号的电脑上，用本仓库的导出脚本生成档案（见文末「导出 storage.json」），再将 `storage.json` 压缩为单行后取 Base64——可节省空间，避免账号较多时超过 Secret 的 48KB 上限：
 
