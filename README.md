@@ -139,6 +139,10 @@ node scripts/save-account.js account1
 node scripts/balance.js
 ```
 
+## 关于本项目
+
+本项目的全部代码、脚本与文档，均由作者使用 [Trae](https://www.trae.cn)（AI 原生 IDE）完成开发。
+
 ## License
 
 [MIT](LICENSE)
