@@ -8,3 +8,9 @@ dist/
 checkin.log
 node_modules/
 *.out
+
+sandbox-share/
+
+
+# 归档包
+trae_checkin*.zip
