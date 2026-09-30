@@ -7,6 +7,15 @@ on:
     - cron: "10 1 * * *"
   workflow_dispatch:
 
+# 同一时刻只允许一个签到任务，手动触发与定时任务不重叠运行
+concurrency:
+  group: trae-checkin
+  cancel-in-progress: false
+
+# 只读权限，最小化工作流令牌权限
+permissions:
+  contents: read
+
 jobs:
   checkin:
     runs-on: ubuntu-latest
@@ -23,29 +32,32 @@ jobs:
       - name: 从 Secrets 还原账号凭证
         shell: bash
         env:
-          ACCOUNT_LI: ${{ secrets.TRAE_ACCOUNT_LI }}
-          ACCOUNT_DA: ${{ secrets.TRAE_ACCOUNT_DA }}
-          ACCOUNT_XIAO: ${{ secrets.TRAE_ACCOUNT_XIAO }}
+          TRAE_ACCOUNTS: ${{ secrets.TRAE_ACCOUNTS }}
         run: |
           mkdir -p accounts
-          # 每个账号还原为 accounts/<账号名>/storage.json；Secret 为空则跳过
-          restore() {
-            name="$1"; value="$2"
-            if [ -n "$value" ]; then
-              mkdir -p "accounts/$name"
-              printf '%s' "$value" | base64 -d > "accounts/$name/storage.json"
-              echo "已还原账号: $name"
-            else
-              echo "未配置 Secret，跳过: $name"
+          if [ -z "$TRAE_ACCOUNTS" ]; then
+            echo "::error::未配置 TRAE_ACCOUNTS。请在仓库 Settings → Secrets and variables → Actions 添加，格式：名称=Base64;名称=Base64"
+            exit 1
+          fi
+          count=0
+          # Secret 格式：名称=Base64;名称=Base64（账号名勿含 = 与 ;，建议用英文/拼音）
+          OLDIFS="$IFS"; IFS=';'
+          for entry in $TRAE_ACCOUNTS; do
+            [ -z "$entry" ] && continue
+            name="${entry%%=*}"
+            value="${entry#*=}"
+            if [ -z "$name" ] || [ -z "$value" ]; then
+              echo "::warning::跳过格式错误的条目: $entry（应为 名称=Base64）"
+              continue
             fi
-          }
-          restore "丽" "$ACCOUNT_LI"
-          restore "大号" "$ACCOUNT_DA"
-          restore "小号" "$ACCOUNT_XIAO"
-          # 所有 Secret 都为空时直接报清晰错误，避免后续步骤无意义重试
-          count=$(find accounts -name storage.json | wc -l)
+            mkdir -p "accounts/$name"
+            printf '%s' "$value" | base64 -d > "accounts/$name/storage.json"
+            echo "已还原账号: $name"
+            count=$((count + 1))
+          done
+          IFS="$OLDIFS"
           if [ "$count" -eq 0 ]; then
-            echo "::error::没有任何账号凭证。请先在仓库 Settings → Secrets and variables → Actions 添加 TRAE_ACCOUNT_LI / TRAE_ACCOUNT_DA / TRAE_ACCOUNT_XIAO。"
+            echo "::error::TRAE_ACCOUNTS 中没有有效条目，格式应为：名称=Base64;名称=Base64"
             exit 1
           fi
 
