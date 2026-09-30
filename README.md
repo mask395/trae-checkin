@@ -66,23 +66,23 @@ Windows 用户也可直接双击 `run-checkin.cmd`（输出写入 `checkin.log`�
 ## 方式二：GitHub Actions 云端运行
 
 1. Fork 本仓库（建议在仓库 Settings 中将 fork **设为私有**）
-2. 确认客户端已登录，导出账号档案并取得 `storage.json` 的 Base64：
+2. 确认客户端已登录，导出账号档案，并将 `storage.json` 压缩为单行后取 Base64（节省空间，避免账号较多时超过 Secret 的 48KB 上限）：
 
    **Windows PowerShell：**
 
    ```powershell
-   [Convert]::ToBase64String([IO.File]::ReadAllBytes("路径\accounts\account1\storage.json"))
+   node -e "const fs=require('fs');process.stdout.write(Buffer.from(JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1],'utf8')))).toString('base64'))" "路径\accounts\account1\storage.json" | Set-Clipboard
    ```
 
    **macOS / Linux：**
 
    ```bash
-   base64 -w 0 路径/accounts/account1/storage.json
+   node -e 'const fs=require("fs");process.stdout.write(Buffer.from(JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1],"utf8")))).toString("base64"))' 路径/accounts/account1/storage.json
    ```
 
 3. 在仓库 **Settings → Secrets and variables → Actions** 添加 Secret：
    - 名称：`TRAE_ACCOUNTS`
-   - 值（多个账号用 `;` 分隔，账号数量任意）：
+   - 值（多个账号用 `;` 分隔，账号数量任意，总长不超过 48KB）：
 
      ```
      account1=<storage.json 的 Base64>;account2=<storage.json 的 Base64>
