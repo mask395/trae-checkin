@@ -81,8 +81,15 @@ function loadAuth() {
     // 登录态在该键下（CN 版为 tc 加密串；国际版可能是明文 JSON）
     const enc = storage["iCubeAuthInfo://icube.cloudide"];
     if (!enc) continue;
-    if (String(enc).trim().startsWith("{")) return JSON.parse(enc); // 国际版明文
-    return decryptAuthValue(String(enc));
+    if (String(enc).trim().startsWith("{")) {
+      const auth = JSON.parse(enc);
+      // 记录该登录态来自哪个 storage 路径，供 clientId 判定（明文模式路径可能丢失，默认 TRAE）
+      auth.__storageFile = p;
+      return auth;
+    }
+    const auth = decryptAuthValue(String(enc));
+    auth.__storageFile = p;
+    return auth;
   }
   throw new Error("未找到 Trae 本地登录态（storage.json）。请先安装并登录 Trae/TraeWork 桌面端。");
 }
@@ -171,62 +178,154 @@ function buildHeaders(token, uid, fp = {}) {
 }
 
 /**
+ * OAuth ClientID（取自官方客户端 product.json → iCubeApp.authConfig 的 stable 通道）。
+ * 刷新令牌与「客户端类型」绑定：ExchangeToken 时传错 ClientID 会返回
+ * 10101 "refresh token is not matched to the client"。
+ *   - TRAE：Trae / Trae CN 个人版
+ *   - SOLO：TRAE SOLO CN / TRAE SOLO
+ */
+const CLIENT_IDS = {
+  trae: "ono9krqynydwx5",
+  solo: "en1oxy7wnw8j9n",
+};
+
+// 客户端类型按客户端数据目录路径判定：路径含 "solo"（如 TRAE SOLO CN）即 SOLO。
+// 不使用 storage 内容键判定——Trae CN 的 storage 中也会出现 solo-lite.* 等键，曾造成误判。
+function detectClientId(storage, p) {
+  return p && /solo/i.test(p) ? CLIENT_IDS.solo : CLIENT_IDS.trae;
+}
+
+// ISO 时间 → epoch 秒（服务端令牌过期字段使用秒级时间戳）
+function toEpochSec(s) {
+  if (s == null) return 0;
+  if (typeof s === "number") return s > 1e12 ? Math.floor(s / 1000) : s;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
+}
+
+/**
+ * 从 storage.json（解密登录态）构建「会话对象」——云端持久化与刷新的最小数据单元。
+ * 字段（与 ExchangeToken 返回及 buildHeaders 的需要严格对应）：
+ *   v 版本号；userId；token/refreshToken；tokenExpireAt/refreshExpireAt（epoch 秒）；
+ *   clientId；host；machineId/deviceId 设备指纹；ideVersion/ideVersionCode 客户端版本。
+ */
+function buildSession(auth, storage, storageFile) {
+  const machineId = storage["telemetry.machineId"] || "";
+  let deviceId = "";
+  for (const k of Object.keys(storage)) {
+    const m = /^iCubeAuthInfo:\/\/icube-dc:(\d+)$/.exec(k);
+    if (m) { deviceId = m[1]; break; }
+  }
+  const version = storage["iCubeLastVersion"] || "";
+  return {
+    v: 1,
+    userId: String(auth.userId || ""),
+    token: auth.token || "",
+    refreshToken: auth.refreshToken || "",
+    tokenExpireAt: toEpochSec(auth.expiredAt),
+    refreshExpireAt: toEpochSec(auth.refreshExpiredAt),
+    clientId: detectClientId(storage, storageFile || auth.__storageFile || ""),
+    host: auth.host || "https://api.trae.cn",
+    machineId,
+    deviceId,
+    ideVersion: version,
+    ideVersionCode: version ? version.replace(/\./g, "") : "",
+  };
+}
+
+// 读取某个 storage.json 文件并构建会话（TRAE_STORAGE_FILE 多账号模式）
+function sessionFromStorageFile(file) {
+  const storage = JSON.parse(fs.readFileSync(file, "utf8"));
+  const enc = storage["iCubeAuthInfo://icube.cloudide"];
+  const auth = String(enc).trim().startsWith("{") ? JSON.parse(enc) : decryptAuthValue(String(enc));
+  return buildSession(auth, storage, file);
+}
+
+/**
  * 返回一个带令牌的客户端：
- *   client.lib  -> 登录态原文（含 userId / host / refreshToken，供需要时判断）
+ *   client.session -> 可变会话对象（刷新后 token/refreshToken/过期时间就地更新）
+ *   client.userId  -> 服务端 userId
+ *   client.lib     -> 兼容字段（balance.js 等读取 userRegion 展示）
  *   client.post(path, body) -> 自动刷新令牌后 POST 并返回 { status, json }
+ *
+ * 会话来源（三选一）：
+ *   1) 环境变量 TRAE_SESSION_FILE：云端 session JSON（推荐，体积小、可持久化）；
+ *   2) 环境变量 TRAE_STORAGE_FILE：accounts/<名>/storage.json 快照（旧格式兼容）；
+ *   3) 默认：自动扫描本机客户端当前登录态。
  */
 async function createClient() {
-  const auth = loadAuth();
-  const host = auth.host || "https://api.trae.cn";
-  const uid = String(auth.userId || "");
-  const device = readDeviceIds();
-  const ver = readClientVersion();
-  const fingerprint = {
-    deviceId: device.deviceId,
-    machineId: device.machineId,
-    ideVersion: ver && ver.ideVersion,
-    ideVersionCode: ver && ver.ideVersionCode,
-  };
-  let token = auth.token;
+  let sess;
+  const sessionFile = process.env.TRAE_SESSION_FILE;
+  const override = process.env.TRAE_STORAGE_FILE;
+  if (sessionFile && fs.existsSync(sessionFile)) {
+    sess = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+    if (!sess.v) sess.v = 1;
+  } else if (override && fs.existsSync(override)) {
+    sess = sessionFromStorageFile(override);
+  } else {
+    // 默认本机模式：取最近登录的 storage.json（loadAuth 与设备/版本读取都指向它）
+    const file = candidateOrder()[0];
+    if (!file) throw new Error("未找到 Trae 本地登录态（storage.json）。请先登录客户端。");
+    sess = sessionFromStorageFile(file);
+  }
+  const uid = String(sess.userId || "");
   let refreshing = null;
 
-  // 用 refreshToken 换新的访问令牌；成功后只更新闭包内的 token，不落盘、不回写 storage.json
+  // 用 refreshToken 换发新令牌；成功后更新会话内的 token 与 refreshToken（轮换！），不落盘
   async function refresh() {
-    if (!auth.refreshToken) return false;
-    // 并发请求同时触发刷新时，复用同一个刷新 Promise，避免多次 ExchangeToken 互相作废旧令牌
+    if (!sess.refreshToken) return false;
+    // 并发请求同时触发刷新时复用同一个 Promise，避免多次 ExchangeToken 互相作废旧令牌
     if (refreshing) return refreshing;
     refreshing = (async () => {
-      const r = await fetch(`${host}/cloudide/api/v3/trae/oauth/ExchangeToken`, {
+      const r = await fetch(`${sess.host}/cloudide/api/v3/trae/oauth/ExchangeToken`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ClientID: "ono9krqynydwx5",
-          RefreshToken: auth.refreshToken,
+          ClientID: sess.clientId,
+          RefreshToken: sess.refreshToken,
           ClientSecret: "-",
           UserID: uid,
         }),
       });
-      const j = await r.json();
-      if (j && j.Result && j.Result.Token) { token = j.Result.Token; return true; }
+      const j = await r.json().catch(() => ({}));
+      const res = j && j.Result;
+      // 服务端每次刷新都会轮换 RefreshToken（一次性），必须同步保存新值，
+      // 否则下一次刷新仍用旧值会 401（云端账号"隔天失效"的根因）
+      if (res && res.Token) {
+        sess.token = res.Token;
+        if (res.RefreshToken) sess.refreshToken = res.RefreshToken;
+        if (res.TokenExpireAt) sess.tokenExpireAt = Number(res.TokenExpireAt);
+        if (res.RefreshExpireAt) sess.refreshExpireAt = Number(res.RefreshExpireAt);
+        return true;
+      }
       return false;
     })();
     try { return await refreshing; } finally { refreshing = null; }
   }
 
-  // 访问令牌临近过期则先行刷新（避免并行请求各自 401 互相踩掉旧令牌）
-  if (!auth.expiredAt || (new Date(auth.expiredAt).getTime() - Date.now()) < 30 * 60 * 1000) {
+  // 访问令牌临近过期（<30 分钟）或已过期则先行刷新，避免并行请求各自 401 互踩
+  if (!sess.tokenExpireAt || sess.tokenExpireAt - Math.floor(Date.now() / 1000) < 30 * 60) {
     await refresh();
   }
 
+  const fingerprint = {
+    deviceId: sess.deviceId,
+    machineId: sess.machineId,
+    ideVersion: sess.ideVersion,
+    ideVersionCode: sess.ideVersionCode,
+  };
+
   return {
-    lib: auth,
-    host,
+    session: sess,
     userId: uid,
+    // 兼容旧调用方：balance.js 读取 lib.userRegion 做展示（CN 客户端默认 CN）
+    lib: { userId: uid, host: sess.host, userRegion: { region: "CN", _aiRegion: "CN" } },
+    host: sess.host,
     async post(p, body) {
       const doFetch = () =>
-        fetch(`${host}${p}`, { method: "POST", headers: buildHeaders(token, uid, fingerprint), body: JSON.stringify(body) });
+        fetch(`${sess.host}${p}`, { method: "POST", headers: buildHeaders(sess.token, uid, fingerprint), body: JSON.stringify(body) });
       let resp = await doFetch();
-      // 服务端判令牌失效（401）时刷新一次后原样重发；仍失败则把响应交给调用方处理
+      // 服务端判令牌失效（401）时刷新一次后原样重发；仍失败则把响应交给调用方
       if (resp.status === 401) { await refresh(); resp = await doFetch(); }
       // json() 解析失败（如空响应）时归一化为空对象，保证调用方不会因解析异常崩溃
       return resp.json().then((j) => ({ status: resp.status, json: j })).catch(() => ({ status: resp.status, json: {} }));
@@ -234,4 +333,13 @@ async function createClient() {
   };
 }
 
-module.exports = { loadAuth, createClient, buildHeaders, decryptAuthValue, candidateOrder };
+module.exports = {
+  loadAuth,
+  createClient,
+  buildHeaders,
+  decryptAuthValue,
+  candidateOrder,
+  buildSession,
+  sessionFromStorageFile,
+  CLIENT_IDS,
+};

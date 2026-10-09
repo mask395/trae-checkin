@@ -7,17 +7,19 @@
 ## 功能
 
 - 自动读取并解密 Trae 桌面客户端登录态（AES-128-CBC，密钥由机器信息派生）
-- 令牌临期自动刷新（401 自动重试，并发刷新自动去重）
+- 令牌临期自动刷新（401 自动重试，并发刷新自动去重），**刷新令牌一次性轮换后自动持久化**
+- **自动区分客户端类型**（Trae CN / TRAE SOLO CN），按各自官方 ClientID 刷新，互不串用
 - 每日签到幂等：重复运行不会重复领取，也不会报错
 - **多账号批量签到**：按 userId 去重，任一账号失败不影响其他账号
-- 安全：令牌仅存在于内存，不打印、不写盘；仅请求官方 `api.trae.cn`
+- 云端以 **GitHub Actions Cache** 持久化每次刷新后的会话，Secret 仅作初始引导
+- 安全：令牌只在内存中处理，日志不打印；仅请求官方 `api.trae.cn`
 
 ## 工作原理
 
-1. 在客户端数据目录中定位 `storage.json`（自动识别 Trae CN / TRAE SOLO CN / 国际版，按修改时间取最新）
-2. 解密其中「tc 格式」的登录态字符串，得到访问令牌、userId、设备指纹
+1. 在客户端数据目录中定位 `storage.json`（自动识别 Trae CN / TRAE SOLO CN，按修改时间取最新）
+2. 解密其中「tc 格式」的登录态字符串，提取访问令牌、userId、设备指纹，并生成约 1~2KB 的最小会话（session）
 3. 携带真实设备指纹（machineId 等）请求官方接口：先查询签到状态，未签则领取
-4. 访问令牌过期时，用 refreshToken 自动换新令牌后重发请求
+4. 访问令牌过期时，用 refreshToken 向官方换取新令牌（refreshToken 一次性轮换），云端模式下轮换后的新会话立即写入 Actions Cache
 
 > 加解密方法与端点均来自对官方客户端的分析，客户端升级后可能失效。
 
@@ -38,18 +40,18 @@
 ### 手动方式（5 步）
 
 1. **Fork 本仓库**（点击页面右上角 Fork；建议随后在你 fork 的 Settings 中将其 **设为私有**）
-2. **导出账号档案**：在登录了目标账号的电脑上，用本仓库的导出脚本生成档案（见文末「导出 storage.json」），再将 `storage.json` 压缩为单行后取 Base64——可节省空间，避免账号较多时超过 Secret 的 48KB 上限：
+2. **导出账号会话**：在登录了目标账号的电脑上，用本仓库的导出脚本生成会话档案（见文末「导出账号会话」），再将 `accounts/<名称>/session.json` 取 Base64（单账号仅约 1~2KB，账号多也远低于 Secret 的 48KB 上限）：
 
    **Windows PowerShell：**
 
    ```powershell
-   node -e "const fs=require('fs');process.stdout.write(Buffer.from(JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1],'utf8')))).toString('base64'))" "路径\accounts\account1\storage.json" | Set-Clipboard
+   node -e "const fs=require('fs');process.stdout.write(Buffer.from(fs.readFileSync(process.argv[1])).toString('base64'))" "路径\accounts\account1\session.json" | Set-Clipboard
    ```
 
    **macOS / Linux：**
 
    ```bash
-   node -e 'const fs=require("fs");process.stdout.write(Buffer.from(JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1],"utf8")))).toString("base64"))' 路径/accounts/account1/storage.json
+   base64 -i 路径/accounts/account1/session.json
    ```
 
 3. **添加 Secret**：在你 fork 的仓库 **Settings → Secrets and variables → Actions** 中新建：
@@ -57,13 +59,19 @@
    - 值（多个账号用 `;` 分隔，账号数量任意，总长不超过 48KB）：
 
      ```
-     account1=<storage.json 的 Base64>;account2=<storage.json 的 Base64>
+     account1=<session.json 的 Base64>;account2=<session.json 的 Base64>
      ```
 
 4. **启用并验证**：进入 **Actions** 页面启用工作流，选择 **Trae 每日签到 → Run workflow** 手动运行一次，确认各账号签到成功
 5. 之后每天北京时间 **09:10** 自动运行，无需任何操作
 
 > Fork 来的仓库默认不启用定时 Actions，需手动开启并至少运行一次。
+
+### 云端会话如何更新：Secret + Cache 双来源
+
+- **Secret（TRAE_ACCOUNTS）是初始引导**：仅在首次部署、添加新账号或重新登录导出后使用；
+- **Actions Cache 是运行状态**：每次运行后，脚本把当次会话（含刷新轮换产生的新 refreshToken）写入 Cache，下次运行优先使用——因此刷新一次令牌后不会再出现"第二天必失效"；
+- 运行时两份来源按账号名合并，**同名账号取 refreshToken 过期时间更晚的一方**：你在任何时候重新导出并更新 Secret，新版本都会在下一次运行时自动生效，无需清理 Cache。
 
 ### 关于"设备每天限签一次"
 
@@ -92,24 +100,26 @@ node scripts/checkin-all.js
 
 Windows 用户也可双击 `run-checkin.cmd`（输出写入 `checkin.log`）；需要每日自动执行时，用「任务计划程序」调用 `run-checkin.cmd /s`。
 
-### 导出 storage.json（云端部署的前置步骤）
+### 导出账号会话（云端部署的前置步骤）
 
-在登录了目标账号的电脑上执行，账号档案会生成到 `accounts/<名称>/storage.json`：
+在登录了目标账号的电脑上执行，会话档案会生成到 `accounts/<名称>/session.json`：
 
 ```powershell
 node scripts/save-account.js account1
 ```
+
+如需更新某个账号（例如云端提示认证失败），在客户端重新登录该账号后，用**相同的账号名**重新运行一次即可覆盖；随后重新生成 Base64 并更新 Secret（或重新运行一键部署）。
 
 ## 目录结构
 
 ```
 .
 ├── scripts/
-│   ├── lib.js           # 鉴权核心：定位/解密登录态、刷新令牌、组装请求
+│   ├── lib.js           # 鉴权核心：定位/解密登录态、生成会话、刷新令牌、组装请求
 │   ├── checkin.js       # 单账号签到
-│   ├── checkin-all.js   # 多账号批量签到
+│   ├── checkin-all.js   # 多账号批量签到（引导/缓存合并与会话输出）
 │   ├── balance.js       # 只读查询积分/额度与签到状态
-│   └── save-account.js  # 导出客户端当前登录账号为档案
+│   └── save-account.js  # 导出客户端当前登录账号为 session 会话
 ├── run-checkin.cmd      # Windows 一键启动器（失败重试 3 次，支持 /s 静默模式）
 └── .github/workflows/
     └── checkin.yml      # GitHub Actions 云端定时签到
@@ -117,8 +127,9 @@ node scripts/save-account.js account1
 
 ## 隐私与安全
 
-- 账号档案（`accounts/`、`storage.json`）等同账号访问权，已默认加入 `.gitignore`，**切勿提交或外传**
+- 账号会话（`accounts/`、`session.json`）等同账号访问权，已默认加入 `.gitignore`，**切勿提交或外传**
 - GitHub Secrets 为加密存储，日志不会回显；仓库公开也不会泄露 Secret，其他人 fork 无法读取你的 Secret
+- Actions Cache 仅用于保存各账号的签到会话（同样敏感），随仓库 Actions 存储，不进入仓库代码
 - 脚本不收集、不上传任何数据，所有请求仅发往官方域名
 
 ## 风险声明
@@ -127,8 +138,11 @@ node scripts/save-account.js account1
 
 ## 常见问题
 
-**Actions 提示登录态读取/刷新失败？**
-对应账号可能已在客户端重新登录，旧快照失效。重新导出该账号的 `storage.json`，更新 Secret 即可。
+**Actions 提示认证失败 / not able to authenticate？**
+对应账号的 refreshToken 已失效（例如被其他工具使用后轮换、长期未登录）。在客户端重新登录该账号，运行 `node scripts/save-account.js <同名>` 重新导出，重新生成 Base64 更新 Secret 后再 Run workflow 即可；其他账号不受影响。
+
+**为什么更新了代码后账号仍报 "refresh token is not matched to the client"？**
+这是旧版用错客户端 ClientID 的问题，现已按 Trae / SOLO 各自的 ClientID 刷新。请重新导出该账号后再更新 Secret。
 
 **定时任务突然不运行了？**
 仓库连续 60 天无活动，GitHub 会自动暂停定时工作流；任意提交一次即可恢复。

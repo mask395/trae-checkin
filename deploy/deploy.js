@@ -36,7 +36,6 @@ const SECRET_LIMIT = 48 * 1024;                          // GitHub 单 Secret �
 let lib;
 try { lib = require(path.join(__dirname, "lib.js")); }
 catch { lib = require(path.join(ROOT, "scripts", "lib.js")); }
-
 // ---------- 终端工具 ----------
 function line(s = "") { console.log(s); }
 function info(s) { console.log(s); }
@@ -91,18 +90,17 @@ function ghSetSecret(repo, name, value) {
 
 // ---------- 业务步骤 ----------
 
-// 第 1 步：读取本机登录账号，并把整个 storage.json 压缩为单行后做 Base64
+// 第 1 步：读取本机登录账号，提取最小会话（session）后做 Base64
 function readLocalAccount() {
   line("【1/6】读取本机 Trae 客户端登录态...");
-  const auth = lib.loadAuth();                       // 解密后的登录态（含 userId/host）
   const storageFile = lib.candidateOrder()[0];      // 最新的 storage.json 完整路径
   if (!storageFile) throw new Error("未找到客户端 storage.json");
-  const storage = JSON.parse(fs.readFileSync(storageFile, "utf8"));
-  // 压缩为单行 JSON：内容字段完全不变，仅去掉缩进空白，可显著减小 Secret 体积
-  const b64 = Buffer.from(JSON.stringify(storage), "utf8").toString("base64");
-  ok(`已读取账号（userId: ${auth.userId || "未知"}）`);
+  // 从完整 storage.json 提取 session：tc 解密、ClientID 判定、设备指纹，约 1~2KB
+  const session = lib.sessionFromStorageFile(storageFile);
+  const b64 = Buffer.from(JSON.stringify(session), "utf8").toString("base64");
+  ok(`已读取账号（userId: ${session.userId || "未知"}，ClientID: ${session.clientId}）`);
   info(`  来源文件: ${storageFile}`);
-  return { b64, userId: String(auth.userId || "") };
+  return { b64, userId: String(session.userId || "") };
 }
 
 // 第 2 步：账号命名（云端 Secret 中的 key），只允许安全字符

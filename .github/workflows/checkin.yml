@@ -29,41 +29,39 @@ jobs:
         with:
           node-version: 22
 
-      - name: 从 Secrets 还原账号凭证
+      # 把 Secret 原文写入引导文件（不再解码到 accounts/ 目录；解析与合并由脚本完成）
+      - name: 写入引导账号文件
         shell: bash
         env:
           TRAE_ACCOUNTS: ${{ secrets.TRAE_ACCOUNTS }}
         run: |
-          mkdir -p accounts
           if [ -z "$TRAE_ACCOUNTS" ]; then
             echo "::error::未配置 TRAE_ACCOUNTS。请在仓库 Settings → Secrets and variables → Actions 添加，格式：名称=Base64;名称=Base64"
             exit 1
           fi
-          count=0
-          # Secret 格式：名称=Base64;名称=Base64（账号名勿含 = 与 ;，建议用英文/拼音）
-          OLDIFS="$IFS"; IFS=';'
-          for entry in $TRAE_ACCOUNTS; do
-            [ -z "$entry" ] && continue
-            name="${entry%%=*}"
-            value="${entry#*=}"
-            if [ -z "$name" ] || [ -z "$value" ]; then
-              echo "::warning::跳过格式错误的条目: $entry（应为 名称=Base64）"
-              continue
-            fi
-            mkdir -p "accounts/$name"
-            printf '%s' "$value" | base64 -d > "accounts/$name/storage.json"
-            echo "已还原账号: $name"
-            count=$((count + 1))
-          done
-          IFS="$OLDIFS"
-          if [ "$count" -eq 0 ]; then
-            echo "::error::TRAE_ACCOUNTS 中没有有效条目，格式应为：名称=Base64;名称=Base64"
-            exit 1
-          fi
+          printf '%s' "$TRAE_ACCOUNTS" > "$RUNNER_TEMP/bootstrap.txt"
+          echo "引导账号文件已写入（${#TRAE_ACCOUNTS} 字符）"
 
+      # 恢复上次运行持久化的会话（含刷新轮换后的新令牌）；
+      # key 按 run_id 唯一，restore-keys 回退到最近一次 v1 缓存
+      - name: 恢复历史会话（Actions Cache）
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .state/state.txt
+          key: trae-sessions-v1-${{ github.run_id }}
+          restore-keys: |
+            trae-sessions-v1-
+
+      # 云端模式三环境变量：引导(Secret) + 状态(Cache) → 合并签到 → 输出新状态
       - name: 批量签到（失败自动重试 3 次）
         shell: bash
+        env:
+          TRAE_BOOTSTRAP_FILE: ${{ runner.temp }}/bootstrap.txt
+          TRAE_STATE_FILE: .state/state.txt
+          TRAE_STATE_OUT: .state/state.txt
         run: |
+          mkdir -p .state
           ok=0
           for i in 1 2 3; do
             if node scripts/checkin-all.js; then ok=1; break; fi
@@ -71,3 +69,11 @@ jobs:
             sleep 20
           done
           [ "$ok" = "1" ]
+
+      # 即使本次运行失败也保存状态（成功刷新过的账号令牌已轮换，必须留存，否则明天双重失效）
+      - name: 持久化本次会话（Actions Cache）
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .state/state.txt
+          key: trae-sessions-v1-${{ github.run_id }}
