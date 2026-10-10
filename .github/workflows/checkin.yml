@@ -1,10 +1,10 @@
 name: Trae 每日签到
 
-# 每天 UTC 01:10（北京时间 09:10）自动运行；Actions 高峰期可能延迟
+# 每天 UTC 00:00（北京时间 08:00）自动运行；Actions 高峰期可能延迟
 # workflow_dispatch：允许在 Actions 页面手动触发，便于部署后立即验证
 on:
   schedule:
-    - cron: "10 1 * * *"
+    - cron: "0 0 * * *"
   workflow_dispatch:
 
 # 同一时刻只允许一个签到任务，手动触发与定时任务不重叠运行
