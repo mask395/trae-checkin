@@ -245,7 +245,6 @@ function sessionFromStorageFile(file) {
  * 返回一个带令牌的客户端：
  *   client.session -> 可变会话对象（刷新后 token/refreshToken/过期时间就地更新）
  *   client.userId  -> 服务端 userId
- *   client.lib     -> 兼容字段（balance.js 等读取 userRegion 展示）
  *   client.post(path, body) -> 自动刷新令牌后 POST 并返回 { status, json }
  *
  * 会话来源（三选一）：
@@ -318,8 +317,6 @@ async function createClient() {
   return {
     session: sess,
     userId: uid,
-    // 兼容旧调用方：balance.js 读取 lib.userRegion 做展示（CN 客户端默认 CN）
-    lib: { userId: uid, host: sess.host, userRegion: { region: "CN", _aiRegion: "CN" } },
     host: sess.host,
     async post(p, body) {
       const doFetch = () =>

@@ -1,6 +1,6 @@
 # Trae Work 每日自动签到
 
-纯 Node.js 实现（**零第三方依赖**）的 Trae Work 每日积分签到工具：读取客户端登录态，自动完成签到。**推荐使用 GitHub Actions 云端定时运行——一次配置，每天自动签到，无需开机、无需手动操作**；也支持本地运行。
+纯 Node.js 实现（**零第三方依赖**）的 Trae Work 每日积分签到工具：读取客户端登录态，自动完成签到。通过 **GitHub Actions 云端定时运行——一次配置，每天自动签到，无需开机、无需手动操作**。
 
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-green) ![License](https://img.shields.io/badge/license-MIT-blue)
 
@@ -23,21 +23,11 @@
 
 > 加解密方法与端点均来自对官方客户端的分析，客户端升级后可能失效。
 
-## 推荐方式：GitHub Actions 云端定时运行
+## GitHub Actions 云端定时运行
 
 一次配置，之后每天自动签到，电脑关机也不受影响。
 
-### 懒人方式：一键部署包（Windows）
-
-不想看教程的用户：
-
-1. 到 [Releases 页面](https://github.com/mask395/trae-checkin/releases) 下载 `Trae云端部署.zip` 并解压
-2. 确保客户端已登录，双击 **一键部署到GitHub.bat**
-3. 按窗口提示完成一次浏览器授权，剩余的 Fork、Secret、启用工作流全自动完成
-
-> 首次运行若弹出 SmartScreen「Windows 已保护你的电脑」：点击 **更多信息 → 仍要运行**（本工具未购买商业代码签名证书）。
-
-### 手动方式（5 步）
+### 配置步骤（5 步）
 
 1. **Fork 本仓库**（点击页面右上角 Fork；建议随后在你 fork 的 Settings 中将其 **设为私有**）
 2. **导出账号会话**：在登录了目标账号的电脑上，用本仓库的导出脚本生成会话档案（见文末「导出账号会话」），再将 `accounts/<名称>/session.json` 取 Base64（单账号仅约 1~2KB，账号多也远低于 Secret 的 48KB 上限）：
@@ -77,38 +67,25 @@
 
 服务端按**设备指纹**去重：同一台设备上登录的多个账号，每天只有一个能签到成功。因此云端配置的每个账号，应在**不同的物理设备**上登录并导出（即让云端"替每台设备签到"）；日志中出现"设备已签跳过"，即代表该账号与其他账号来自同一设备。
 
-## 其他方式：本地运行（可选）
+## 导出账号会话
 
-> 坦白说：如果你只有一台设备、且愿意每天手动打开客户端，那直接在客户端里点签到最省事；本地多账号需要反复切换登录，意义不大。本地方式更适合**单账号自动签到**或**开发调试**。
+云端部署的前置步骤，也可以在本地批量运行签到（见本节末尾）。
 
-要求：已安装 [Node.js](https://nodejs.org/)（LTS 版），客户端已登录。
-
-**单账号**（直接使用客户端当前登录态）：
-
-```powershell
-node scripts/checkin.js
-```
-
-**多账号**：每登录一个账号，导出一次档案：
+要求：已安装 [Node.js](https://nodejs.org/)（LTS 版），客户端已登录。每登录一个账号，导出一次档案：
 
 ```powershell
 node scripts/save-account.js account1
 # 在客户端切换登录下一个账号
 node scripts/save-account.js account2
+```
+
+档案会生成到 `accounts/<名称>/session.json`。如需本地直接签到（不走云端），执行：
+
+```powershell
 node scripts/checkin-all.js
 ```
 
-Windows 用户也可双击 `run-checkin.cmd`（输出写入 `checkin.log`）；需要每日自动执行时，用「任务计划程序」调用 `run-checkin.cmd /s`。
-
-### 导出账号会话（云端部署的前置步骤）
-
-在登录了目标账号的电脑上执行，会话档案会生成到 `accounts/<名称>/session.json`：
-
-```powershell
-node scripts/save-account.js account1
-```
-
-如需更新某个账号（例如云端提示认证失败），在客户端重新登录该账号后，用**相同的账号名**重新运行一次即可覆盖；随后重新生成 Base64 并更新 Secret（或重新运行一键部署）。
+如需更新某个账号（例如云端提示认证失败），在客户端重新登录该账号后，用**相同的账号名**重新运行一次 `save-account.js` 即可覆盖；随后重新生成 Base64 并更新 Secret。
 
 ## 目录结构
 
@@ -116,11 +93,8 @@ node scripts/save-account.js account1
 .
 ├── scripts/
 │   ├── lib.js           # 鉴权核心：定位/解密登录态、生成会话、刷新令牌、组装请求
-│   ├── checkin.js       # 单账号签到
 │   ├── checkin-all.js   # 多账号批量签到（引导/缓存合并与会话输出）
-│   ├── balance.js       # 只读查询积分/额度与签到状态
 │   └── save-account.js  # 导出客户端当前登录账号为 session 会话
-├── run-checkin.cmd      # Windows 一键启动器（失败重试 3 次，支持 /s 静默模式）
 └── .github/workflows/
     └── checkin.yml      # GitHub Actions 云端定时签到
 ```
@@ -146,12 +120,6 @@ node scripts/save-account.js account1
 
 **定时任务突然不运行了？**
 仓库连续 60 天无活动，GitHub 会自动暂停定时工作流；任意提交一次即可恢复。
-
-**如何查询积分余额？**
-
-```powershell
-node scripts/balance.js
-```
 
 ## 思路参考：用一台电脑导出多个账号（Windows 沙盒）
 
