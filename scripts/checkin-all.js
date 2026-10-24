@@ -71,13 +71,21 @@ function parseEntries(file) {
   return out;
 }
 
+// 过期时间归一化为秒：云端刷新后写入的可能是毫秒（1.8e12 量级），
+// 而 save-account.js 导出的是秒（1.8e9 量级）。不归一化直接比较时，
+// 毫秒值永远更大，导致缓存中的失效会话永远压过 Secret 里新导出的有效会话。
+function normExpiry(v) {
+  const n = Number(v || 0);
+  return n > 1e12 ? Math.floor(n / 1000) : n;
+}
+
 // 合并两份会话（引导 Secret / 缓存状态）：同名取刷新令牌过期更晚的一方
 function mergeSessions(a, b) {
   const out = new Map();
   for (const [k, v] of a) out.set(k, v);
   for (const [k, v] of b) {
     const old = out.get(k);
-    if (!old || Number(v.refreshExpireAt || 0) >= Number(old.refreshExpireAt || 0)) out.set(k, v);
+    if (!old || normExpiry(v.refreshExpireAt) >= normExpiry(old.refreshExpireAt)) out.set(k, v);
   }
   return out;
 }

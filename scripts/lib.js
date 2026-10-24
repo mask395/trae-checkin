@@ -293,8 +293,10 @@ async function createClient() {
       if (res && res.Token) {
         sess.token = res.Token;
         if (res.RefreshToken) sess.refreshToken = res.RefreshToken;
-        if (res.TokenExpireAt) sess.tokenExpireAt = Number(res.TokenExpireAt);
-        if (res.RefreshExpireAt) sess.refreshExpireAt = Number(res.RefreshExpireAt);
+        // 服务端返回毫秒时间戳；统一转成秒，与 save-account.js 导出的单位一致，
+        // 否则云端缓存会写出毫秒值，导致合并时永远压过新导出的秒值会话
+        if (res.TokenExpireAt) sess.tokenExpireAt = Math.floor(Number(res.TokenExpireAt) / 1000);
+        if (res.RefreshExpireAt) sess.refreshExpireAt = Math.floor(Number(res.RefreshExpireAt) / 1000);
         return true;
       }
       return false;
@@ -322,10 +324,16 @@ async function createClient() {
       const doFetch = () =>
         fetch(`${sess.host}${p}`, { method: "POST", headers: buildHeaders(sess.token, uid, fingerprint), body: JSON.stringify(body) });
       let resp = await doFetch();
-      // 服务端判令牌失效（401）时刷新一次后原样重发；仍失败则把响应交给调用方
-      if (resp.status === 401) { await refresh(); resp = await doFetch(); }
-      // json() 解析失败（如空响应）时归一化为空对象，保证调用方不会因解析异常崩溃
-      return resp.json().then((j) => ({ status: resp.status, json: j })).catch(() => ({ status: resp.status, json: {} }));
+      let j = await resp.json().catch(() => ({}));
+      // 服务端判令牌失效有两种形态：HTTP 401，或 HTTP 200 + 业务码 1001
+      // （"We're sorry, but we are not able to authenticate you."，访问令牌已过期/被吊销时出现）。
+      // 两者都刷新一次后原样重发；仍失败则把响应交给调用方（最多重试一次，避免死循环）。
+      if (resp.status === 401 || j.code === 1001) {
+        await refresh();
+        resp = await doFetch();
+        j = await resp.json().catch(() => ({}));
+      }
+      return { status: resp.status, json: j };
     },
   };
 }
